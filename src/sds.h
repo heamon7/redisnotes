@@ -37,6 +37,7 @@
 #include <stdarg.h>
 
 // sds 类型
+// heamon7: 注意这个在sds.c中的sdsnewlen中有使用
 typedef char *sds;
 //heamon7: sds和sdshdr有什么区别
 //heamon7: sdshdr的定义使用了一个变长数组，flesible array member
@@ -52,6 +53,7 @@ struct sdshdr {
     // 实际保存字符串数据的地方
     // 利用c99(C99 specification 6.7.2.1.16)中引入的 flexible array member,通过buf来引用sdshdr后面的地址，
     // 详情google "flexible array member"
+// heamon7: 通过使用flexible member array而不是poiter可以有效的减少内存使用量
     char buf[];
 };
 

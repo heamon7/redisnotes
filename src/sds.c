@@ -37,40 +37,41 @@
 #include "zmalloc.h"
 
 /*
- * 创建一个指定长度的 sds 
+ * 创建一个指定长度的 sds
  * 如果给定了初始化值 init 的话，那么将 init 复制到 sds 的 buf 当中
  *
  * T = O(N)
  */
-sds sdsnewlen(const void *init, size_t initlen) {
+sds sdsnewlen(const void *init, size_t initlen) { // heamon7: 注意返回值是sds，而不是sdshdr
 
-    struct sdshdr *sh;
+    struct sdshdr *sh;  // heamon7: 注意这里声明的是sdshdr
 
     // 有 init ？
     // O(N)
+    // heamon7: 注意观察这里申请的空间大小
     if (init) {
-        sh = zmalloc(sizeof(struct sdshdr)+initlen+1); //heamon7: malloc分配的内存都是未经初始化的
+        sh = zmalloc(sizeof(struct sdshdr)+initlen+1); //heamon7: malloc分配的内存都是未经初始化的,如果需要init，那么就直接malloc
     } else {
-        sh = zcalloc(sizeof(struct sdshdr)+initlen+1); //heamon7: calloc分配的内存空间都是已经被初始化为0的
+        sh = zcalloc(sizeof(struct sdshdr)+initlen+1); //heamon7: calloc分配的内存空间都是已经被初始化为0的，如果不需要init，就直接calloc
     }
 
     // 内存不足，分配失败
     if (sh == NULL) return NULL;
 
-    sh->len = initlen;
+    sh->len = initlen; // heamon7: 设置sds的len和free属性，注意这里设置了len和free的值，认为这个新创建的sds是满的
     sh->free = 0;
 
     // 如果给定了 init 且 initlen 不为 0 的话
     // 那么将 init 的内容复制至 sds buf
     // O(N)
     if (initlen && init)
-        memcpy(sh->buf, init, initlen);
+        memcpy(sh->buf, init, initlen); // heamon7: 注意这里不管传入的init是什么，总是保证了填满initlen个字节
 
     // 加上终结符
-    sh->buf[initlen] = '\0';
+    sh->buf[initlen] = '\0'; // heamon7: 不管传入的init和initlen的值是多少，这里总是可以让新创建的sds是满的，并且以 '\0' 结束
 
     // 返回 buf 而不是整个 sdshdr
-    return (char*)sh->buf;
+    return (char*)sh->buf;  // heamon7: 注意这里将sdshdr结构中的最后一个伸缩型字符数组成员buf，转换成char*，然后返回，而函数声明的返回类型是sds，这个就是字符型指针
 }
 
 /*
@@ -78,6 +79,7 @@ sds sdsnewlen(const void *init, size_t initlen) {
  *
  * T = O(N)
  */
+ // heamon7: 注意这里虽然没有使用参数，但是还是传入了一个void型参数
 sds sdsempty(void) {
     // O(N)
     return sdsnewlen("",0);
@@ -89,16 +91,18 @@ sds sdsempty(void) {
  *
  * T = O(N)
  */
+ // heamon7: ？哈哈，真有意思，这个也定义成一个新的函数了，为什么这些函数没有定义成宏函数呢？
 sds sdsnew(const char *init) {
     size_t initlen = (init == NULL) ? 0 : strlen(init);
     return sdsnewlen(init, initlen);
 }
 
-/* 
+/*
  * 复制给定 sds
  *
  * T = O(N)
  */
+// heamon7: 注意这里和上面的sdsnew的区别，传入的参数是sds类型的，虽然最终也是char*,但是sds类型表明了这个char*有对应的sdshdr结构
 sds sdsdup(const sds s) {
     return sdsnewlen(s, sdslen(s));
 }
@@ -110,6 +114,7 @@ sds sdsdup(const sds s) {
  *
  * T = O(N)
  */
+ // heamon7: 注意这里释放sds的时候，直接释放的是结构体指针，如果sdshdr中的buf定义成了指针类型的话，需要先释放这个buf指针，再释放sdshdr指针
 void sdsfree(sds s) {
     if (s == NULL) return;
     zfree(s-sizeof(struct sdshdr));
@@ -149,10 +154,10 @@ void sdsclear(sds s) {
 /* Enlarge the free space at the end of the sds string so that the caller
  * is sure that after calling this function can overwrite up to addlen
  * bytes after the end of the string, plus one more byte for nul term.
- * 
+ *
  * Note: this does not change the *size* of the sds string as returned
  * by sdslen(), but only the free buffer space we have. */
-/* 
+/*
  * 对 sds 的 buf 进行扩展，扩展的长度不少于 addlen 。
  *
  * T = O(N)
@@ -160,7 +165,7 @@ void sdsclear(sds s) {
 sds sdsMakeRoomFor(
     sds s,
     size_t addlen   // 需要增加的空间长度
-) 
+)
 {
     struct sdshdr *sh, *newsh;
     size_t free = sdsavail(s);
@@ -207,7 +212,7 @@ sds sdsRemoveFreeSpace(sds s) {
 
     sh = (void*) (s-(sizeof(struct sdshdr)));
 
-    // 修改 buf 长度为 sh->len + 1 
+    // 修改 buf 长度为 sh->len + 1
     // 不保留任何多余空间
     sh = zrealloc(sh, sizeof(struct sdshdr)+sh->len+1);
 
@@ -359,7 +364,7 @@ sds sdscatlen(sds s, const void *t, size_t len) {
 }
 
 /*
- * 将一个 char 数组拼接到 sds 末尾 
+ * 将一个 char 数组拼接到 sds 末尾
  *
  * T = O(N)
  */
@@ -368,7 +373,7 @@ sds sdscat(sds s, const char *t) {
 }
 
 /*
- * 拼接两个 sds 
+ * 拼接两个 sds
  *
  * T = O(N)
  */
