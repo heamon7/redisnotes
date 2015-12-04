@@ -81,7 +81,7 @@ void zlibc_free(void *ptr) {
 #define update_zmalloc_stat_sub(__n) __sync_sub_and_fetch(&used_memory, (__n))  // heamon7: GNUC提供的线程安全的减法运算
 #else
 #define update_zmalloc_stat_add(__n) do { \
-    pthread_mutex_lock(&used_memory_mutex); \
+    pthread_mutex_lock(&used_memory_mutex); \ // heamon7: 加锁和解锁
     used_memory += (__n); \
     pthread_mutex_unlock(&used_memory_mutex); \
 } while(0)
@@ -113,14 +113,14 @@ void zlibc_free(void *ptr) {
     } \
 } while(0)
 
-// heamon7: 这里揭示了非常重要的一点，默认是没有启动线程安全的，也就是说redis是一个单线程的程序，而之所以能有如此高的并发，原因在于使用了
-// heamon7: 提高并发的三种方法中的 多路I/O复用技术。迅速的原因在于 数据全部在内存里，完全不需要访问磁盘
-// heamon7: 参考： [单线程的redis为何会有如此好的性能](http://segmentfault.com/q/1010000000666417)
-// heamon7: [单线程多路复用和多线程加锁的区别](http://segmentfault.com/q/1010000004026316)
-// heamon7: [快在哪里呢？EPOLL？内存](http://www.zhihu.com/question/19764056)
-// heamon7: [I/O多路复用技术（multiplexing）是什么？](http://www.zhihu.com/question/28594409)
-// heamon7: [Redis为什么是单线程?](http://cloudate.net/?p=222)
-
+/* heamon7: 这里揭示了非常重要的一点，默认是没有启动线程安全的，也就是说redis是一个单线程的程序，而之所以能有如此高的并发，原因在于使用了
+ * 提高并发的三种方法中的 多路I/O复用技术。迅速的原因在于 数据全部在内存里，完全不需要访问磁盘
+ * 参考： [单线程的redis为何会有如此好的性能](http://segmentfault.com/q/1010000000666417)
+ * [单线程多路复用和多线程加锁的区别](http://segmentfault.com/q/1010000004026316)
+ * [快在哪里呢？EPOLL？内存](http://www.zhihu.com/question/19764056)
+ * [I/O多路复用技术（multiplexing）是什么？](http://www.zhihu.com/question/28594409)
+ * [Redis为什么是单线程?](http://cloudate.net/?p=222)
+ */
 static size_t used_memory = 0;  // heamon7: 定义的全局变量，用于统计记录使用的内存
 static int zmalloc_thread_safe = 0; // heamon7: ？为什么默认没有启动线程安全呢？作用就是表示是否启用线程安全，默认没有启用线程安全
 pthread_mutex_t used_memory_mutex = PTHREAD_MUTEX_INITIALIZER;  // heamon7:  线程锁，用来在统计时对全局变量used_memory进行加锁
@@ -154,16 +154,16 @@ void *zcalloc(size_t size) {
     void *ptr = calloc(1, size+PREFIX_SIZE);  // heamon7: 注意默认是1个obj，每个obj的size是size
 
     if (!ptr) zmalloc_oom_handler(size);
-#ifdef HAVE_MALLOC_SIZE
+#ifdef HAVE_MALLOC_SIZE  // heamon7: 统计分配的内存
     update_zmalloc_stat_alloc(zmalloc_size(ptr));
     return ptr;
-#else
+#else // heamon7: 不会执行
     *((size_t*)ptr) = size;
     update_zmalloc_stat_alloc(size+PREFIX_SIZE);
     return (char*)ptr+PREFIX_SIZE;
 #endif
 }
-// heamon7: zrealloc的编程接口和
+// heamon7: zrealloc的编程接口和realloc的接口是一样的，
 void *zrealloc(void *ptr, size_t size) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;
@@ -171,16 +171,16 @@ void *zrealloc(void *ptr, size_t size) {
     size_t oldsize;
     void *newptr;
 
-    if (ptr == NULL) return zmalloc(size);
+    if (ptr == NULL) return zmalloc(size);  // heamon7: 如果传入的是空指针，则直接调用zmalloc新分配一个空间，并返回地址指针
 #ifdef HAVE_MALLOC_SIZE
-    oldsize = zmalloc_size(ptr);
-    newptr = realloc(ptr,size);
-    if (!newptr) zmalloc_oom_handler(size);
+    oldsize = zmalloc_size(ptr); // heamon7: 记录重分配前的空间大小
+    newptr = realloc(ptr,size);  // heamon7: 重新分配空间，返回新的地址
+    if (!newptr) zmalloc_oom_handler(size);  // heamon7: 分配失败处理
 
-    update_zmalloc_stat_free(oldsize);
-    update_zmalloc_stat_alloc(zmalloc_size(newptr));
+    update_zmalloc_stat_free(oldsize);  // heamon7: 统计释放的内存块（ptr也可能并没有被释放掉，可能是减少）
+    update_zmalloc_stat_alloc(zmalloc_size(newptr));  // heamon7: ？统计分配的内存块,可是在zmalloc里面不是已经统计过了吗？
     return newptr;
-#else
+#else  // heamon7: linux不会执行
     realptr = (char*)ptr-PREFIX_SIZE;
     oldsize = *((size_t*)realptr);
     newptr = realloc(realptr,size+PREFIX_SIZE);
@@ -196,21 +196,22 @@ void *zrealloc(void *ptr, size_t size) {
 /* Provide zmalloc_size() for systems where this function is not provided by
  * malloc itself, given that in that case we store an header with this
  * information as the first bytes of every allocation. */
+
 // heamon7: 通过 man malloc_size ，我们知道了malloc_size可以返回指向了分配的内存块的大小，但是有些系统并没有实现这个函数，
 // heamon7: 对于那些没有实现这个函数的，我们需要自己来实现这个函数,系统有没有提供是通过zmalloc.h中定义的宏HAVE_MALLOC_SIZE说明的
-
 #ifndef HAVE_MALLOC_SIZE
 size_t zmalloc_size(void *ptr) {
     void *realptr = (char*)ptr-PREFIX_SIZE;
     size_t size = *((size_t*)realptr);
     /* Assume at least that all the allocations are padded at sizeof(long) by
      * the underlying allocator. */
-    // heamon7: 如果size的值和sizeof(long)的值相等，那么条件为假，当size增加2^4时，貌似也为0
+    // heamon7: 如果ptr指向的内存块不是8的倍数，则要进行对齐
     if (size&(sizeof(long)-1)) size += sizeof(long)-(size&(sizeof(long)-1));
     return size+PREFIX_SIZE;
 }
 #endif
 
+// heamon7: 和free的编程接口一致，释放内存
 void zfree(void *ptr) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;
@@ -218,7 +219,7 @@ void zfree(void *ptr) {
 #endif
 
     if (ptr == NULL) return;
-#ifdef HAVE_MALLOC_SIZE
+#ifdef HAVE_MALLOC_SIZE  // heamon7: 统计释放内存的大小，然后释放
     update_zmalloc_stat_free(zmalloc_size(ptr));
     free(ptr);
 #else
@@ -229,37 +230,36 @@ void zfree(void *ptr) {
 #endif
 }
 
+// heamon7: 通过man strdup ，这个函数把字符串s复制到堆内存，然后返回相应的堆地址
 char *zstrdup(const char *s) {
-    size_t l = strlen(s)+1;
+    size_t l = strlen(s)+1;  // heamon7: 得到字符串长度，strlen不包括\0,所以加1
     char *p = zmalloc(l);
-
-    memcpy(p,s,l);
+    memcpy(p,s,l);  // heamon7: 使用memcpy来复制字符串，（会不会不安全呢？）
     return p;
 }
 
+// heamon7: 返回使用的内存量,通过返回全局静态变量used_memory
 size_t zmalloc_used_memory(void) {
     size_t um;
-
     if (zmalloc_thread_safe) {
 #ifdef HAVE_ATOMIC
         um = __sync_add_and_fetch(&used_memory, 0);
 #else
-        pthread_mutex_lock(&used_memory_mutex);
+        pthread_mutex_lock(&used_memory_mutex); // heamon7: 这里如果启用了线程安全的话，实现线程同步是使用互斥锁，加锁然后解锁
         um = used_memory;
         pthread_mutex_unlock(&used_memory_mutex);
 #endif
-    }
+    } // heamon7: 这里直接返回used_memory
     else {
         um = used_memory;
     }
-
     return um;
 }
-
+// heamon7: 启用线程安全的函数，通过操作全局静态变量zmalloc_thread_safe
 void zmalloc_enable_thread_safeness(void) {
     zmalloc_thread_safe = 1;
 }
-
+// heamon7: 分配内存失败的处理函数，注意 zmalloc_oom_handler 是一个函数指针
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {
     zmalloc_oom_handler = oom_handler;
 }
@@ -274,24 +274,30 @@ void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {
  * function RedisEstimateRSS() that is a much faster (and less precise)
  * version of the funciton. */
 
+// heamon7: 这个宏是在config.h中定义了，是proc filesystem 相关的，linux条件成立
 #if defined(HAVE_PROC_STAT)
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 
+/* heamon7:
+ * 获取RSS的大小，这个RSS可不是我们在网络上常常看到的RSS，而是指的Resident Set Size，表示当前进程实际所驻留在内存中的空间大小，即不包括被交换（swap）出去的空间。
+ * 我们所申请的内存空间不会全部常驻内存，系统会把其中一部分暂时不用的部分从内存中置换到swap区.
+ * 通过[man proc](http://man7.org/linux/man-pages/man5/proc.5.html)，我们知道/proc[pid]/stat这个文件的第24个字段的rss信息，单位是pages（内存页数）
+ */
 size_t zmalloc_get_rss(void) {
-    int page = sysconf(_SC_PAGESIZE);
+    int page = sysconf(_SC_PAGESIZE);  // heamon7: 通过 man sysconf，我们知道这个函数可以获得一些系统的参数，这里是获得一页内存的大小，单位是字节，这里是4096 Byte
     size_t rss;
-    char buf[4096];
-    char filename[256];
+    char buf[4096];  // heamon7: 申请缓存
+    char filename[256];  // heamon7: 用于存储文件名
     int fd, count;
     char *p, *x;
 
-    snprintf(filename,256,"/proc/%d/stat",getpid());
-    if ((fd = open(filename,O_RDONLY)) == -1) return 0;
-    if (read(fd,buf,4096) <= 0) {
-        close(fd);
+    snprintf(filename,256,"/proc/%d/stat",getpid()); // heamon7: 通过查看snprintf的用法，我们知道它最多返回有255个字符的字符串到filename中
+    if ((fd = open(filename,O_RDONLY)) == -1) return 0; // heamon7: 读取filename这个文件，并返回文件描述符到fd，注意fd就是一个整数，如果读失败，就返回
+    if (read(fd,buf,4096) <= 0) { // heamon7: 通过 [man read ](http://man7.org/linux/man-pages/man2/read.2.html),知道这里从fd中最多读4096个字符到buf中
+        close(fd); // heamon7: 如果失败，关闭fd，并返回
         return 0;
     }
     close(fd);
@@ -299,16 +305,16 @@ size_t zmalloc_get_rss(void) {
     p = buf;
     count = 23; /* RSS is the 24th field in /proc/<pid>/stat */
     while(p && count--) {
-        p = strchr(p,' ');
-        if (p) p++;
+        p = strchr(p,' '); // heamon7: 通过 [man strchr ](http://man7.org/linux/man-pages/man3/strchr.3.html) ,返回字符串s中第一次出现字符c的地址指针
+        if (p) p++;  // heamon7: 注意这里有把p右移了一位，指向了空格之后
     }
-    if (!p) return 0;
-    x = strchr(p,' ');
+    if (!p) return 0;  // heamon7: 如果遍历完了23个空格，到了字符串的结尾，则返回
+    x = strchr(p,' '); //heamon7: x指向第24个字段的结尾
     if (!x) return 0;
-    *x = '\0';
+    *x = '\0'; // heamon7: 设置字符串终止标志
 
-    rss = strtoll(p,NULL,10);
-    rss *= page;
+    rss = strtoll(p,NULL,10); // heamon7: 通过[man strtoll](http://man7.org/linux/man-pages/man3/strtol.3.html),我们知道,这里是把这个字段转成一个long long型
+    rss *= page;  // heamon7: 内存大小等于页数乘以每页大小
     return rss;
 }
 #elif defined(HAVE_TASKINFO)
@@ -342,24 +348,61 @@ size_t zmalloc_get_rss(void) {
 }
 #endif
 
+/* heamon7:
+ * 这个函数是查询内存内部碎片率（fragmentation ratio），即RSS和所分配总内存空间的比值。
+ * 内存碎片分为：内部碎片和外部碎片
+ * 内部碎片：是已经被分配出去（能明确指出属于哪个进程）却不能被利用的内存空间，直到进程释放掉，才能被系统利用；
+ * 外部碎片：是还没有被分配出去（不属于任何进程），但由于太小了无法分配给申请内存空间的新进程的内存空闲区域。
+ */
+
 /* Fragmentation = RSS / allocated-bytes */
 float zmalloc_get_fragmentation_ratio(void) {
     return (float)zmalloc_get_rss()/zmalloc_used_memory();
 }
 
+/* heamon7: 这个宏是在config.h中定义了，是proc filesystem 相关的，linux条件成立
+ * /proc/self/smaps 和 /proc/[pid]/smaps是等同的，self/ 表示的是当前进程的状态目录。而smaps文件中记录着该进程每一个映像消耗的内存相关信息，该文件内部由多个结构相同的块组成
+ * 00400000-0048a000 r-xp 00000000 fd:03 960637       /bin/bash
+                  Size:                552 kB
+                  Rss:                 460 kB
+                  Pss:                 100 kB
+                  Shared_Clean:        452 kB
+                  Shared_Dirty:          0 kB
+                  Private_Clean:         8 kB
+                  Private_Dirty:         0 kB
+                  Referenced:          460 kB
+                  Anonymous:             0 kB
+                  AnonHugePages:         0 kB
+                  Swap:                  0 kB
+                  KernelPageSize:        4 kB
+                  MMUPageSize:           4 kB
+                  Locked:                0 kB
+ * Rss=Shared_Clean+Shared_Dirty+Private_Clean+Private_Dirty
+  其中：
+Shared_Clean:多进程共享的内存，且其内容未被任意进程修改
+Shared_Dirty:多进程共享的内存，但其内容被某个进程修改
+Private_Clean:某个进程独享的内存，且其内容没有修改
+Private_Dirty:某个进程独享的内存，但其内容被该进程修改
+其实所谓的共享的内存，一般指的就是Unix系统中的共享库（.so文件）的使用，共享库又叫动态库（含义同Windows下的.dll文件），它只有在程序运行时才被装入内存。
+这时共享库中的代码和数据可能会被多个进程所调用，于是就会产生共享（Shared）与私有（Private）、干净（Clean）与脏（Dirty）的区别了。此外该处所说的共享的内存除了包括共享库以外，
+还包括System V的IPC机制之一的共享内存段（shared memory）
+ */
 #if defined(HAVE_PROC_SMAPS)
 size_t zmalloc_get_private_dirty(void) {
-    char line[1024];
+    char line[1024];  // heamon7: 申请缓冲区
     size_t pd = 0;
-    FILE *fp = fopen("/proc/self/smaps","r");
-
+    FILE *fp = fopen("/proc/self/smaps","r"); // heamon7: 只读打开文件
     if (!fp) return 0;
+/* heamon7:
+ * 通过[man fgets](http://man7.org/linux/man-pages/man3/fgets.3.html),知道fgets每次最多读取size-1个字符，并且遇到换行和文件结束就会停止，换行和结束符也存储
+ * ，失败时返回null,成功时返回s，这里相当于就是在每次读取一行
+ */
     while(fgets(line,sizeof(line),fp) != NULL) {
-        if (strncmp(line,"Private_Dirty:",14) == 0) {
-            char *p = strchr(line,'k');
+        if (strncmp(line,"Private_Dirty:",14) == 0) { // heamon7: 每次读到以 "Private_Dirty:" 开头的行的时候
+            char *p = strchr(line,'k');  // heamon7: 就找到这一行的k的前面，也就是数字的后面
             if (p) {
-                *p = '\0';
-                pd += strtol(line+14,NULL,10) * 1024;
+                *p = '\0';  // heamon7: 设置字符串终止字符
+                pd += strtol(line+14,NULL,10) * 1024;  // heamon7: 将这个数字量的字符串转成long
             }
         }
     }
@@ -377,5 +420,5 @@ size_t zmalloc_get_private_dirty(void) {
  * - [Redis内存管理的基石zmallc.c源码解读（二）](http://blog.csdn.net/guodongxiaren/article/details/44783767)
  * - [Redis 内存管理示意图 ](https://www.processon.com/view/551f9419e4b039866d18dd99)
  * - [Redis 内存数据管理](http://wiki.jikexueyuan.com/project/redis/memory-data-management.html)
- * - []
+ * - [redis源码分析之内存布局](http://mingxinglai.com/cn/2015/06/memory-layout-of-redis/)
  */
